@@ -1,0 +1,146 @@
+<USER_REQUEST>
+# PROJECT: AI/ML MODEL VALIDATION & ASSURANCE PLATFORM
+
+## 1. ROLE
+
+Act as a senior Python AI/ML engineer, ML reliability engineer, backend architect, security-conscious software engineer, and SaaS product architect.
+
+I am an MCA student building a serious portfolio/research-oriented project called:
+
+**AI/ML Model Validation & Assurance Platform**
+
+The goal is to create a platform that evaluates machine-learning models across multiple dimensions instead of checking only accuracy.
+
+This must be designed as a real, modular product that can later evolve into:
+
+1. AI-generated code validation
+2. Autonomous software validation agent
+
+Do NOT build those two future modules now. Design the architecture so they can be added later without rewriting the core system.
+
+---
+
+# 2. MAIN OBJECTIVE
+
+Build a web-based platform where a user can upload:
+
+- A trained ML model
+- A compatible test dataset
+- Target/label information
+- Optional sensitive/group attributes for fairness analysis
+
+The platform automatically analyzes the model and generates a comprehensive validation report.
+
+The first MVP should primarily support common Python/scikit-learn models.
+
+Example:
+
+model.pkl
+test.csv
+
+The system should:
+
+1. Inspect the uploaded model
+2. Inspect the dataset
+3. Detect the model/problem type where possible
+4. Validate compatibility between model and dataset
+5. Run multiple validation modules
+6. Detect potential problems
+7. Assign severity to findings
+8. Calculate category scores
+9. Calculate an overall Model Health Score
+10. Display results in a professional dashboard
+11. Generate a downloadable report
+
+---
+
+# 3. IMPORTANT DEVELOPMENT RULE
+
+DO NOT generate the entire application in one giant implementation.
+
+Work incrementally.
+
+First create the architecture and foundation.
+
+Then implement each module one by one.
+
+After each major module:
+
+- Run tests
+- Check imports
+- Check API endpoints
+- Check database operations
+- Check frontend/backend integratio
+<truncated 17767 bytes>
+ Automated tests
+16. README
+
+Create a working application that starts successfully.
+
+After completing Phase 1, stop and provide:
+
+- What was implemented
+- Files created
+- How to run backend
+- How to run frontend
+- Database setup instructions
+- Tests executed
+- Known issues
+- Recommended next phase
+
+DO NOT continue automatically into all validation modules.
+
+---
+
+# 36. CODE QUALITY RULES
+
+Follow these rules throughout the project:
+
+- Clean architecture
+- Type hints
+- Docstrings for important public functions
+- Small functions
+- No giant files
+- No duplicated logic
+- No hard-coded secrets
+- No hard-coded absolute paths
+- No fake metrics
+- No placeholder implementations presented as finished functionality
+- No silently swallowed exceptions
+- Meaningful error messages
+- Proper HTTP status codes
+- Secure file handling
+- Input validation
+- Unit tests
+- Integration tests where appropriate
+
+When uncertain between a quick hack and a maintainable architecture, choose the maintainable architecture.
+
+---
+
+# FINAL INSTRUCTION
+
+Start with PHASE 1 only.
+
+Before writing large amounts of code:
+
+1. Inspect the project directory.
+2. Create the architecture.
+3. Explain the implementation approach briefly.
+4. Implement Phase 1.
+5. Run the application.
+6. Run tests.
+7. Fix errors.
+8. Verify backend and frontend communicate correctly.
+9. Stop.
+
+Do not implement the remaining validation modules until I explicitly instruct you to proceed.
+
+The final result should be a genuine foundation for a serious AI/ML Model Validation & Assurance SaaS platform, not a toy demonstration.
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-05T18:58:04+05:30.
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Claude Opus 4.6 (Thinking). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>
