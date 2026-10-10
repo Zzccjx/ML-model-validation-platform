@@ -64,6 +64,7 @@ class ValidationContext:
     config: dict[str, Any] = field(default_factory=dict)
     features: Any = None
     targets: Any = None
+    adapter: Any = None  # BaseModelAdapter instance
 
 
 class BaseValidator(ABC):

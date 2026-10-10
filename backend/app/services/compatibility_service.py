@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from app.utils.model_utils import load_model_safely
+from app.adapters.factory import get_adapter
 from app.utils.dataset_utils import load_dataset
 
 logger = logging.getLogger('ai_validation')
@@ -47,18 +47,28 @@ def check_compatibility(
     """Check if a model and dataset are compatible for validation.
     
     Verifies:
-    1. Model file can be loaded
+    1. Model file can be loaded via format-aware adapter
     2. Dataset file can be parsed
-    3. Target column exists
-    4. Feature count matches
+    3. Target column exists and is valid (if provided)
+    4. Feature count and column alignment match
     5. Prediction interface works on a sample
     """
     result = CompatibilityResult()
     
-    # 1. Load model
+    # 1. Load model via format adapter
     try:
-        model = load_model_safely(model_path)
-        result.model_info['class'] = type(model).__name__
+        adapter = get_adapter(model_path)
+        model = adapter.load()
+        insp = adapter.inspect()
+        result.model_info['class'] = insp.get('model_class', type(model).__name__)
+        result.model_info['framework'] = adapter.framework_name
+        result.model_info['type'] = adapter.model_type
+        if 'input_shape' in insp:
+            result.model_info['input_shape'] = insp['input_shape']
+        if 'output_shape' in insp:
+            result.model_info['output_shape'] = insp['output_shape']
+        if 'total_parameters' in insp:
+            result.model_info['total_parameters'] = insp['total_parameters']
     except FileNotFoundError:
         result.compatible = False
         result.messages.append(f'Model file not found: {model_path}')
@@ -83,9 +93,8 @@ def check_compatibility(
         return result
     
     # 3. Target detection / check
+    target_series = None
     if not target_column:
-        # Check if dataset record or model hints a target column
-        # Otherwise if feature_names_in_ exists, look for non-feature columns
         expected_names = getattr(model, 'feature_names_in_', None)
         if expected_names is not None:
             candidates = [c for c in df.columns if c not in set(expected_names)]
@@ -103,13 +112,14 @@ def check_compatibility(
         if target_column in df.columns:
             target_series = df[target_column]
             if target_series.isna().all():
-                result.warnings.append(f'Target column "{target_column}" contains only NaN values.')
+                result.compatible = False
+                result.messages.append(f'Target column "{target_column}" contains only NaN values.')
+                return result
             result.dataset_info['target_column'] = target_column
         else:
-            result.warnings.append(
-                f'Target column "{target_column}" not found in dataset. Performance validator will be skipped.'
-            )
-            target_column = ''
+            result.compatible = False
+            result.messages.append(f'Target column "{target_column}" not found in dataset.')
+            return result
     else:
         result.warnings.append(
             'No ground-truth target column specified or detected. Performance validator will report "Not Evaluated", but full unsupervised, quality, robustness, and explainability validation will run.'
@@ -131,12 +141,15 @@ def check_compatibility(
         feature_columns = expected_list
         result.dataset_info['aligned_with_feature_names_in'] = True
     elif feature_columns:
-        missing = [c for c in feature_columns if c not in df.columns]
+        # Exclude target column from features if present
+        actual_features = [c for c in feature_columns if c != target_column] if target_column else feature_columns
+        missing = [c for c in actual_features if c not in df.columns]
         if missing:
             result.compatible = False
             result.messages.append(f'Missing feature columns: {missing}')
             return result
-        X = df[feature_columns]
+        X = df[actual_features]
+        feature_columns = actual_features
     else:
         # Use all columns except target
         cols_to_drop = [target_column] if target_column and target_column in df.columns else []
@@ -154,40 +167,43 @@ def check_compatibility(
     result.dataset_info['feature_count'] = len(feature_columns)
     
     # 5. Check feature count
+    expected_feat = None
     if hasattr(model, 'n_features_in_'):
-        expected = int(model.n_features_in_)
+        expected_feat = int(model.n_features_in_)
+    elif insp.get('feature_count') is not None:
+        expected_feat = int(insp['feature_count'])
+    
+    if expected_feat is not None:
         actual = len(feature_columns)
-
-        result.model_info['expected_features'] = expected
-        if expected != actual:
+        result.model_info['expected_features'] = expected_feat
+        if expected_feat != actual:
             result.compatible = False
             result.messages.append(
-                f'Feature count mismatch: model expects {expected} features, '
+                f'Feature count mismatch: model expects {expected_feat} features, '
                 f'dataset has {actual} feature columns'
             )
             return result
     
     # 6. Target problem-type compatibility
-    from sklearn.base import is_classifier, is_regressor
-    if is_classifier(model):
-        result.model_info['type'] = 'classification'
-        if hasattr(model, 'classes_'):
-            model_classes = set(model.classes_)
-            target_unique = set(target_series.dropna().unique())
-            unseen = target_unique - model_classes
-            if unseen:
-                result.warnings.append(
-                    f'Target contains labels not present in model classes_: {list(unseen)}'
+    if target_series is not None:
+        m_type = adapter.model_type
+        if m_type == 'classification':
+            if hasattr(model, 'classes_'):
+                model_classes = set(model.classes_)
+                target_unique = set(target_series.dropna().unique())
+                unseen = target_unique - model_classes
+                if unseen:
+                    result.warnings.append(
+                        f'Target contains labels not present in model classes_: {list(unseen)}'
+                    )
+        elif m_type == 'regression':
+            if not pd.api.types.is_numeric_dtype(target_series.dtype):
+                result.compatible = False
+                result.messages.append(
+                    f'Target column "{target_column}" has non-numeric dtype ({target_series.dtype}), '
+                    f'incompatible with regression model {result.model_info.get("class")}.'
                 )
-    elif is_regressor(model):
-        result.model_info['type'] = 'regression'
-        if not pd.api.types.is_numeric_dtype(target_series.dtype):
-            result.compatible = False
-            result.messages.append(
-                f'Target column "{target_column}" has non-numeric dtype ({target_series.dtype}), '
-                f'incompatible with regression model {result.model_info.get("class")}.'
-            )
-            return result
+                return result
 
     # 7. Check NaN tolerances
     nan_count = int(X.isna().sum().sum())
@@ -200,12 +216,11 @@ def check_compatibility(
     # 8. Test prediction on a sample
     try:
         sample = X.head(min(5, len(X)))
-        # First attempt native predict without imputation
         try:
-            preds = model.predict(sample)
+            preds = adapter.predict(sample)
         except Exception:
             # If native prediction fails due to NaNs, test with zero-imputation
-            preds = model.predict(sample.fillna(0))
+            preds = adapter.predict(sample.fillna(0))
             result.warnings.append('Model required missing value imputation (zeros) to produce predictions on sample.')
 
         result.model_info['prediction_works'] = True
@@ -218,16 +233,12 @@ def check_compatibility(
         ]
         
         # Check probability output capability
-        has_proba = hasattr(model, 'predict_proba') and callable(getattr(model, 'predict_proba'))
-        if not has_proba and hasattr(model, 'output_shape') and hasattr(model, 'layers'):
-            try:
-                last_layer = getattr(model, 'layers', [])[-1]
-                act = getattr(getattr(last_layer, 'activation', None), '__name__', '')
-                if act in ('sigmoid', 'softmax'):
-                    has_proba = True
-            except Exception:
-                pass
-        result.model_info['supports_probabilities'] = has_proba
+        proba_res = None
+        try:
+            proba_res = adapter.predict_proba(sample.fillna(0))
+        except Exception:
+            pass
+        result.model_info['supports_probabilities'] = (proba_res is not None)
         
     except Exception as e:
         result.compatible = False

@@ -7,7 +7,7 @@ from fastapi import UploadFile, HTTPException, status
 
 from app.models.ml_model import MLModel
 from app.utils.file_utils import save_upload_file, delete_file, validate_file_extension, ALLOWED_MODEL_EXTENSIONS
-from app.utils.model_utils import load_model_safely, detect_model_type, detect_framework, get_model_metadata
+from app.adapters.factory import get_adapter
 
 logger = logging.getLogger('ai_validation')
 
@@ -23,7 +23,7 @@ async def upload_model(
     
     file_path, file_size = await save_upload_file(file, f'models/{project_id}')
     
-    # Inspect the model
+    # Inspect the model using format adapter
     model_type = None
     framework = None
     feature_count = None
@@ -32,17 +32,17 @@ async def upload_model(
     metadata_json = None
     
     try:
-        loaded_model = load_model_safely(file_path)
-        model_type = detect_model_type(loaded_model)
-        framework = detect_framework(loaded_model)
-        metadata = get_model_metadata(loaded_model)
+        adapter = get_adapter(file_path)
+        metadata = adapter.inspect()
+        model_type = adapter.model_type
+        framework = adapter.framework_name
         feature_count = metadata.get('feature_count')
         class_count = metadata.get('class_count')
         classes_json = metadata.get('classes')
         metadata_json = metadata
     except Exception as e:
-        logger.warning('Failed to inspect model: %s', str(e))
-        # Model uploaded but couldn't be inspected. Still save it.
+        logger.warning('Failed to inspect model %s: %s', file.filename, str(e))
+        metadata_json = {'inspection_error': str(e)}
     
     db_model = MLModel(
         project_id=project_id,
@@ -92,21 +92,19 @@ async def delete_model(db: AsyncSession, model_id: uuid.UUID) -> None:
 
 
 async def inspect_model(db: AsyncSession, model_id: uuid.UUID) -> dict:
-    """Load model file and return deep diagnostic metadata."""
+    """Load model file and return deep diagnostic metadata via format adapter."""
     model = await get_model(db, model_id)
     try:
-        loaded = load_model_safely(model.file_path)
-        meta = get_model_metadata(loaded)
-        m_type = detect_model_type(loaded)
-        framework = detect_framework(loaded)
+        adapter = get_adapter(model.file_path)
+        meta = adapter.inspect()
         
         return {
             'id': model.id,
             'name': model.name,
             'filename': model.filename,
             'file_size': model.file_size,
-            'model_type': m_type,
-            'framework': framework,
+            'model_type': adapter.model_type,
+            'framework': adapter.framework_name,
             'model_class': meta.get('model_class'),
             'feature_count': meta.get('feature_count'),
             'feature_names': meta.get('feature_names'),
@@ -128,4 +126,3 @@ async def inspect_model(db: AsyncSession, model_id: uuid.UUID) -> dict:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f'Failed to inspect model: {str(e)}'
         )
-

@@ -14,6 +14,7 @@ from app.services.scoring_service import calculate_scores
 from app.validators.registry import get_registry
 from app.validators.base import ValidationContext, ValidationFinding
 from app.utils.model_utils import load_model_safely, detect_model_type, detect_framework
+from app.adapters.factory import get_adapter
 from app.utils.dataset_utils import load_dataset
 
 logger = logging.getLogger('ai_validation')
@@ -169,12 +170,13 @@ async def execute_validation(db: AsyncSession, run: ValidationRun) -> None:
         sensitive_cols = (run.config_json or {}).get('sensitive_columns') or dataset_record.sensitive_columns_json or []
 
         if validators:
-            # Build validation context
-            model = load_model_safely(model_record.file_path)
+            # Build validation context with format adapter
+            adapter = get_adapter(model_record.file_path)
+            raw_model = adapter.load()
             dataset = load_dataset(dataset_record.file_path)
 
             if not target_col:
-                expected_names = getattr(model, 'feature_names_in_', None)
+                expected_names = getattr(raw_model, 'feature_names_in_', None)
                 if expected_names is not None:
                     candidates = [c for c in dataset.columns if c not in set(expected_names)]
                     if len(candidates) == 1:
@@ -186,17 +188,17 @@ async def execute_validation(db: AsyncSession, run: ValidationRun) -> None:
                 elif 'y' in dataset.columns:
                     target_col = 'y'
 
-            
             context = ValidationContext(
-                model=model,
-                model_type=model_record.model_type or detect_model_type(model),
-                framework=model_record.framework or detect_framework(model),
+                model=adapter,
+                model_type=model_record.model_type or adapter.model_type,
+                framework=model_record.framework or adapter.framework_name,
                 dataset=dataset,
                 target_column=target_col,
                 feature_columns=feature_columns or [],
                 sensitive_columns=sensitive_cols,
                 reference_dataset=ref_dataset,
                 config=run.config_json or {},
+                adapter=adapter,
             )
             
             results = []

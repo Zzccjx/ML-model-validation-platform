@@ -37,6 +37,13 @@ async def upload_dataset(
         column_count = summary['column_count']
         metadata_json = summary
         
+        if not target_column:
+            # Auto-detect target column by standard naming conventions
+            for candidate in ['target', 'label', 'y', 'class', 'price']:
+                if candidate in df.columns:
+                    target_column = candidate
+                    break
+
         if target_column:
             target_result = validate_target_column(df, target_column)
             if not target_result['valid']:
