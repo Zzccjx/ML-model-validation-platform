@@ -1,4 +1,4 @@
-﻿"""Model Fairness & Bias Validator module.
+"""Model Fairness & Bias Validator module.
 
 Evaluates algorithmic bias, demographic parity, disparate impact (four-fifths rule),
 equal opportunity, and equalized odds across protected / sensitive demographic groups.
@@ -16,6 +16,13 @@ from app.validators.base import (
 )
 
 
+KNOWN_DEMOGRAPHIC_CANDIDATES = [
+    'gender', 'sex', 'race', 'ethnicity', 'age', 'age_group',
+    'region', 'country', 'nationality', 'marital_status',
+    'education', 'income_group', 'disability'
+]
+
+
 class FairnessValidator(BaseValidator):
     """Validator assessing group fairness and bias across sensitive attributes."""
 
@@ -23,25 +30,77 @@ class FairnessValidator(BaseValidator):
     version = "1.0.0"
     category = "fairness"
 
+    def _resolve_sensitive_columns(self, context: ValidationContext) -> list[str]:
+        """Resolve sensitive attributes from config, explicit context, or dataset column heuristics."""
+        if context.dataset is None:
+            return []
+            
+        configured = (context.config or {}).get("sensitive_columns") or context.sensitive_columns or []
+        present_configured = [c for c in configured if c in context.dataset.columns]
+        if present_configured:
+            return present_configured
+            
+        # Discover candidate attributes in dataset matching demographic patterns
+        # Only suggest low-cardinality discrete columns (2 to 20 unique values)
+        detected = []
+        for col in context.dataset.columns:
+            if col == context.target_column:
+                continue
+            col_lower = str(col).lower()
+            if any(k in col_lower for k in KNOWN_DEMOGRAPHIC_CANDIDATES):
+                n_uniq = context.dataset[col].nunique(dropna=True)
+                if 2 <= n_uniq <= 20:
+                    detected.append(col)
+        return detected
+
     def is_applicable(self, context: ValidationContext) -> bool:
-        """Applicable when sensitive columns are provided and exist in dataset."""
-        if not context.sensitive_columns or context.dataset is None:
+        """Applicable when classification model and sensitive columns are available."""
+        if context.model_type == 'regression':
             return False
-        return any(c in context.dataset.columns for c in context.sensitive_columns)
+        if context.dataset is None or context.target_column not in context.dataset.columns:
+            return False
+        sensitive_cols = self._resolve_sensitive_columns(context)
+        return len(sensitive_cols) > 0
+
+    def get_inapplicability_details(self, context: ValidationContext) -> tuple[ValidatorStatus, str]:
+        """Return clear status and explanation when fairness cannot be evaluated."""
+        if context.model_type == 'regression':
+            return (
+                ValidatorStatus.UNSUPPORTED,
+                "Task unsupported: Group fairness parity metrics (disparate impact, equal opportunity, demographic parity) are formulated for discrete classification decisions."
+            )
+        return (
+            ValidatorStatus.NOT_EVALUATED,
+            "Prerequisites missing: Demographic / sensitive group attributes were not configured or detected in the evaluation dataset. Fairness analysis requires explicit group attributes (e.g. gender, age group)."
+        )
 
     def validate(self, context: ValidationContext) -> ValidatorResult:
         """Execute group fairness evaluation."""
+        if context.dataset is None or context.target_column not in context.dataset.columns:
+            return ValidatorResult(
+                validator_name=self.name,
+                validator_version=self.version,
+                status=ValidatorStatus.NOT_EVALUATED,
+                status_label='NOT_EVALUATED',
+                score=None,
+                error_message="Dataset or target column missing for fairness analysis.",
+                explanation="Dataset or target column missing for fairness analysis.",
+                category=self.category,
+            )
+
         df: pd.DataFrame = context.dataset
         target_col = context.target_column
-        sensitive_cols = [c for c in context.sensitive_columns if c in df.columns]
+        sensitive_cols = self._resolve_sensitive_columns(context)
 
         if not sensitive_cols:
             return ValidatorResult(
                 validator_name=self.name,
                 validator_version=self.version,
-                status=ValidatorStatus.SKIPPED,
+                status=ValidatorStatus.NOT_EVALUATED,
+                status_label='NOT_EVALUATED',
                 score=None,
-                error_message="No sensitive attributes specified. Fairness evaluation skipped.",
+                error_message="Sensitive demographic attributes were not configured or detected. Fairness evaluation not evaluated.",
+                explanation="Prerequisites missing: Sensitive demographic attributes were not configured or detected.",
                 category=self.category,
             )
 
@@ -57,14 +116,21 @@ class FairnessValidator(BaseValidator):
         X = df[feature_cols].copy().fillna(0)
         y_pred = context.model.predict(X)
 
-        # Determine binary outcome orientation
+        # Determine binary outcome orientation with optional configuration
         target_series = df[target_col]
         labels = (
             list(context.model.classes_)
             if hasattr(context.model, "classes_")
             else sorted(list(np.unique(target_series)))
         )
-        pos_label = labels[-1]  # Typically 1 in {0, 1}
+        
+        cfg_pos = (context.config or {}).get("positive_label")
+        if cfg_pos is not None and cfg_pos in labels:
+            pos_label = cfg_pos
+        elif cfg_pos is not None and str(cfg_pos) in [str(l) for l in labels]:
+            pos_label = [l for l in labels if str(l) == str(cfg_pos)][0]
+        else:
+            pos_label = labels[-1]  # Standard default (e.g. 1 in binary 0/1)
 
         y_true_bin = (target_series == pos_label).astype(int).values
         y_pred_bin = (pd.Series(y_pred) == pos_label).astype(int).values
@@ -76,6 +142,13 @@ class FairnessValidator(BaseValidator):
 
         metrics["sensitive_attributes"] = sensitive_cols
         metrics["positive_label"] = str(pos_label)
+        metrics["total_records_evaluated"] = len(df)
+        metrics["metric_definitions"] = {
+            "disparate_impact_ratio": "Ratio of minimum to maximum selection rate among groups (EEOC 80% Four-Fifths benchmark).",
+            "demographic_parity_difference": "Absolute difference between maximum and minimum group selection rate (P(pred=positive)).",
+            "equal_opportunity_difference": "Absolute difference in True Positive Rate (TPR / Recall) across groups.",
+            "equalized_odds_difference": "Maximum of TPR gap and FPR gap across groups."
+        }
         metrics["attributes"] = {}
 
         for s_col in sensitive_cols:
@@ -268,23 +341,39 @@ class FairnessValidator(BaseValidator):
             attribute_scores.append(float(np.clip(attr_score, 0.0, 100.0)))
 
         # Overall fairness score
-        final_score = float(np.mean(attribute_scores)) if attribute_scores else 100.0
+        if not attribute_scores:
+            return ValidatorResult(
+                validator_name=self.name,
+                validator_version=self.version,
+                status=ValidatorStatus.NOT_EVALUATED,
+                status_label='NOT_EVALUATED',
+                score=None,
+                error_message="Configured sensitive attributes did not contain at least 2 distinct groups with valid sample counts.",
+                explanation="Configured sensitive attributes did not contain at least 2 distinct groups with valid sample counts.",
+                category=self.category,
+                metrics=metrics,
+            )
+
+        final_score = float(np.mean(attribute_scores))
         final_score = float(np.clip(final_score, 0.0, 100.0))
 
         # Scientific communication language
         recommendations.append(
             f"Within the tested sensitive attributes ({', '.join(sensitive_cols)}) and sample dataset, "
             f"fairness score evaluated to {final_score:.1f}/100. "
-            "Note: Algorithmic fairness evaluations are conditional on the provided dataset and attributes."
+            "Note: Algorithmic fairness evaluations are conditional on the provided dataset and attributes, "
+            "and statistical disparity does not alone constitute legal proof of unlawful discrimination."
         )
 
         return ValidatorResult(
             validator_name=self.name,
             validator_version=self.version,
             status=ValidatorStatus.SUCCESS,
+            status_label='EVALUATED',
             score=round(final_score, 1),
             findings=findings,
             metrics=metrics,
             recommendations=recommendations,
             category=self.category,
+            explanation=f"Evaluated across {len(sensitive_cols)} sensitive attribute(s): {', '.join(sensitive_cols)}.",
         )

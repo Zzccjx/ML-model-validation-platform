@@ -89,3 +89,79 @@ class FindingResponse(BaseModel):
 class FindingListResponse(BaseModel):
     findings: list[FindingResponse]
     total: int
+
+
+class RowPredictionItem(BaseModel):
+    row_index: int
+    actual: Any
+    predicted: Any
+    correct: bool | None = None
+    error: float | None = None
+    abs_error: float | None = None
+    pct_error: float | None = None
+    probabilities: dict[str, float] | None = None
+
+
+class PredictionTableResponse(BaseModel):
+    total_rows: int
+    returned_rows: int
+    offset: int
+    limit: int
+    task_type: str  # 'classification' or 'regression'
+    has_probabilities: bool
+    summary: dict[str, Any]
+    items: list[RowPredictionItem]
+
+
+class ChartAxis(BaseModel):
+    key: str
+    label: str
+    type: str = "category"
+    unit: str | None = None
+
+
+class ChartSeries(BaseModel):
+    key: str
+    label: str
+    color: str | None = None
+    type: str | None = None
+
+
+class ChartThreshold(BaseModel):
+    value: float
+    label: str
+    color: str = "#ef4444"
+    style: str = "dashed"
+
+
+class ChartProvenance(BaseModel):
+    source_validator: str
+    status: str = "EVALUATED"
+    sample_count: int | None = None
+    note: str | None = None
+
+
+class ChartDefinition(BaseModel):
+    chart_id: str
+    title: str
+    description: str
+    category: str
+    chart_type: str
+    status: str = "EVALUATED"
+    x_axis: ChartAxis
+    y_axis: ChartAxis
+    series: list[ChartSeries] = []
+    data: list[dict[str, Any]] = []
+    matrix: dict[str, Any] | None = None
+    thresholds: list[ChartThreshold] = []
+    interpretation: str | None = None
+    provenance: ChartProvenance
+
+
+class ChartsResponse(BaseModel):
+    run_id: uuid.UUID
+    run_number: str
+    total_charts: int
+    categories: list[str]
+    charts: list[ChartDefinition]
+

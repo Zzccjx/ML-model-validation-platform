@@ -12,7 +12,7 @@ from app.models.finding import Finding, Severity
 from app.services.compatibility_service import check_compatibility
 from app.services.scoring_service import calculate_scores
 from app.validators.registry import get_registry
-from app.validators.base import ValidationContext, ValidationFinding
+from app.validators.base import ValidationContext, ValidationFinding, ValidatorStatus
 from app.utils.model_utils import load_model_safely, detect_model_type, detect_framework
 from app.adapters.factory import get_adapter
 from app.utils.dataset_utils import load_dataset
@@ -206,9 +206,25 @@ async def execute_validation(db: AsyncSession, run: ValidationRun) -> None:
                 res = await v.safe_validate(context)
                 results.append(res)
             
-            # Persist computed validator metrics
+            # Persist computed validator metrics and module statuses
             run_config = dict(run.config_json or {})
-            run_config['metrics'] = {vr.validator_name: vr.metrics for vr in results}
+            metrics_dict = {}
+            statuses_dict = {}
+            for vr in results:
+                m = dict(vr.metrics or {})
+                if vr.status in (ValidatorStatus.NOT_EVALUATED, ValidatorStatus.UNSUPPORTED, ValidatorStatus.SKIPPED):
+                    m['_status'] = vr.status.value
+                    m['_status_label'] = getattr(vr, 'status_label', vr.status.value.upper())
+                    m['_explanation'] = vr.explanation or vr.error_message
+                metrics_dict[vr.validator_name] = m
+                statuses_dict[vr.validator_name] = {
+                    'status': vr.status.value,
+                    'status_label': getattr(vr, 'status_label', vr.status.value.upper()),
+                    'explanation': vr.explanation or vr.error_message,
+                    'score': vr.score,
+                }
+            run_config['metrics'] = metrics_dict
+            run_config['validator_statuses'] = statuses_dict
             run.config_json = run_config
 
 

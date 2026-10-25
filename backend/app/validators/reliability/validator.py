@@ -81,12 +81,13 @@ class ReliabilityValidator(BaseValidator):
         if not has_predict_proba:
             findings.append(
                 ValidationFinding(
-                    severity="LOW",
+                    severity="INFO",
                     category=self.category,
                     title="Model Does Not Output Probability Estimates",
                     description=(
                         "The model does not provide a predict_proba method. Discrete calibration metrics "
-                        "(Brier score, Expected Calibration Error) cannot be computed directly."
+                        "(Brier score, Expected Calibration Error) require continuous posterior probability estimates "
+                        "and cannot be computed for deterministic discrete outputs."
                     ),
                     metric_name="has_predict_proba",
                     metric_value=0.0,
@@ -103,15 +104,21 @@ class ReliabilityValidator(BaseValidator):
             return ValidatorResult(
                 validator_name=self.name,
                 validator_version=self.version,
-                status=ValidatorStatus.SUCCESS,
-                score=70.0,
+                status=ValidatorStatus.NOT_EVALUATED,
+                status_label="NOT_EVALUATED",
+                score=None,
                 findings=findings,
                 metrics={
                     "supports_probabilities": False,
-                    "reliability_status": "PROBABILITIES_UNAVAILABLE",
+                    "reliability_status": "NOT_EVALUATED",
+                    "explanation": "Model lacks predict_proba method. Discrete classification outputs cannot evaluate probabilistic calibration.",
+                    "_status": "not_evaluated",
+                    "_status_label": "NOT_EVALUATED",
+                    "_explanation": "Model does not output probability estimates (predict_proba unavailable).",
                 },
                 recommendations=recommendations,
                 category=self.category,
+                explanation="Model lacks predict_proba method. Discrete classification outputs cannot evaluate probabilistic calibration.",
             )
 
         try:
@@ -122,8 +129,9 @@ class ReliabilityValidator(BaseValidator):
             return ValidatorResult(
                 validator_name=self.name,
                 validator_version=self.version,
-                status=ValidatorStatus.FAILED,
-                score=0.0,
+                status=ValidatorStatus.ERROR,
+                status_label="ERROR",
+                score=None,
                 error_message=f"Model failed to generate probability estimates: {str(e)}",
                 category=self.category,
             )
@@ -449,8 +457,9 @@ class ReliabilityValidator(BaseValidator):
             return ValidatorResult(
                 validator_name=self.name,
                 validator_version=self.version,
-                status=ValidatorStatus.FAILED,
-                score=0.0,
+                status=ValidatorStatus.ERROR,
+                status_label="ERROR",
+                score=None,
                 error_message=f"Regression uncertainty evaluation failed: {str(e)}",
                 category=self.category,
             )

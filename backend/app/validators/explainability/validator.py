@@ -73,20 +73,24 @@ class ExplainabilityValidator(BaseValidator):
         method = "unknown"
         raw_importances = None
 
-        # 1. Native tree feature importance (RandomForest, ExtraTrees, GBDT, etc.)
-        if hasattr(context.model, "feature_importances_"):
+        # 1. Native Tree feature_importances_ (RandomForest, ExtraTrees, GBDT, etc.)
+        raw_model = getattr(context.model, "model", context.model)
+        sample_n = min(100, len(X))
+        X_sample = X.sample(n=sample_n, random_state=42) if len(X) > sample_n else X
+
+        if hasattr(raw_model, "feature_importances_"):
             try:
-                imp = np.array(context.model.feature_importances_, dtype=float)
+                imp = np.array(raw_model.feature_importances_, dtype=float)
                 if len(imp) == n_features:
                     raw_importances = np.maximum(0.0, imp)
                     method = "tree_feature_importances"
             except Exception:
                 pass
 
-        # 2. Linear model coefficients (LogisticRegression, LinearRegression, etc.)
-        if raw_importances is None and hasattr(context.model, "coef_"):
+        # 2. Linear model coefficients
+        if raw_importances is None and hasattr(raw_model, "coef_"):
             try:
-                coef = np.array(context.model.coef_, dtype=float)
+                coef = np.array(raw_model.coef_, dtype=float)
                 if coef.ndim == 2:
                     imp = np.mean(np.abs(coef), axis=0)
                 else:
@@ -97,20 +101,51 @@ class ExplainabilityValidator(BaseValidator):
             except Exception:
                 pass
 
-        # 3. Permutation feature importance fallback
+        # 3. Authentic SHAP TreeExplainer / LinearExplainer fallback or enrichment
+        if raw_importances is None:
+            try:
+                import shap
+                is_tree = any(tree_kw in type(raw_model).__name__.lower() for tree_kw in ["forest", "tree", "gbm", "boost", "xgb", "lgb"]) or hasattr(raw_model, "estimators_")
+                if is_tree:
+                    explainer = shap.TreeExplainer(raw_model)
+                    sv = explainer.shap_values(X_sample)
+                    if isinstance(sv, list):
+                        imp = np.mean([np.mean(np.abs(s), axis=0) for s in sv], axis=0)
+                    elif hasattr(sv, "ndim") and sv.ndim == 3:
+                        imp = np.mean(np.mean(np.abs(sv), axis=2), axis=0)
+                    else:
+                        imp = np.mean(np.abs(sv), axis=0)
+                    if len(imp) == n_features and np.sum(imp) > 0:
+                        raw_importances = np.maximum(0.0, np.array(imp, dtype=float))
+                        method = "shap_tree_explainer"
+                elif hasattr(raw_model, "coef_"):
+                    masker = shap.maskers.Independent(data=X_sample)
+                    explainer = shap.LinearExplainer(raw_model, masker=masker)
+                    sv = explainer.shap_values(X_sample)
+                    if isinstance(sv, list):
+                        imp = np.mean([np.mean(np.abs(s), axis=0) for s in sv], axis=0)
+                    else:
+                        imp = np.mean(np.abs(sv), axis=0)
+                    if len(imp) == n_features and np.sum(imp) > 0:
+                        raw_importances = np.maximum(0.0, np.array(imp, dtype=float))
+                        method = "shap_linear_explainer"
+            except Exception:
+                pass
+
+        # 4. Model-agnostic Permutation Feature Importance
         if raw_importances is None and target_col in df.columns:
             try:
-                sample_n = min(200, len(df))
-                df_sample = df.sample(n=sample_n, random_state=42)
-                X_sample = df_sample[feat_cols].fillna(0)
-                y_sample = df_sample[target_col]
-                perm = permutation_importance(context.model, X_sample, y_sample, n_repeats=3, random_state=42)
+                perm_sample_n = min(150, len(df))
+                df_sample = df.sample(n=perm_sample_n, random_state=42)
+                X_p = df_sample[feat_cols].fillna(0)
+                y_p = df_sample[target_col]
+                perm = permutation_importance(context.model, X_p, y_p, n_repeats=3, random_state=42)
                 raw_importances = np.maximum(0.0, perm.importances_mean)
                 method = "permutation_importance"
             except Exception:
                 pass
 
-        # 4. Fallback if no method succeeded
+        # 5. Fallback if no method succeeded
         if raw_importances is None:
             raw_importances = np.ones(n_features, dtype=float) / n_features
             method = "uniform_fallback"
@@ -251,7 +286,18 @@ class ExplainabilityValidator(BaseValidator):
 
         final_score = max(0.0, min(100.0, round(score, 1)))
 
+        method_display_names = {
+            "shap_tree_explainer": "SHAP TreeExplainer (Tree-based game-theoretic attribution)",
+            "shap_linear_explainer": "SHAP LinearExplainer (Linear game-theoretic attribution)",
+            "tree_feature_importances": "Native Tree Gini/Gain Feature Importances",
+            "linear_coefficients": "Normalized Linear Model Coefficients (|coef_|)",
+            "permutation_importance": "Model-Agnostic Permutation Feature Importance",
+            "uniform_fallback": "Uniform Attribution Fallback (Inconclusive)",
+        }
+        method_desc = method_display_names.get(method, method)
+
         metrics["attribution_method"] = method
+        metrics["attribution_method_description"] = method_desc
         metrics["distribution_balance"] = distribution_balance
         metrics["total_features_analyzed"] = n_features
         metrics["top_feature_name"] = top_feature_name
@@ -260,14 +306,20 @@ class ExplainabilityValidator(BaseValidator):
         metrics["low_impact_features_count"] = len(low_impact_features)
         metrics["zero_impact_features_count"] = len(zero_impact_features)
         metrics["features"] = feature_entries
+        metrics["attribution_disclaimer"] = (
+            "Empirical feature importance reflects model association and decision sensitivity, "
+            "not verified real-world causal mechanism or regulatory proof."
+        )
 
         return ValidatorResult(
             validator_name=self.name,
             validator_version=self.version,
             status=ValidatorStatus.SUCCESS,
+            status_label="EVALUATED",
             score=final_score,
             findings=findings,
             metrics=metrics,
             recommendations=recommendations,
             category=self.category,
+            explanation=f"Evaluated using {method_desc}. Empirical feature importance reflects model sensitivity, not causal mechanism.",
         )

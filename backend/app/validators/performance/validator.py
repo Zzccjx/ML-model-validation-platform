@@ -1,4 +1,4 @@
-﻿"""Model Performance Validator module.
+"""Model Performance Validator module.
 
 Evaluates ML models across standard performance metrics for both
 classification and regression tasks.
@@ -246,6 +246,67 @@ class PerformanceValidator(BaseValidator):
                 )
             )
 
+        # --- Row-Level Prediction Comparisons (Deepchecks Reference) ---
+        n_rows = len(y)
+        y_true_list = list(y.values) if hasattr(y, "values") else list(y)
+        y_pred_list = list(y_pred)
+        
+        row_comparisons: list[dict[str, Any]] = []
+        incorrect_indices: list[int] = []
+        
+        for idx in range(n_rows):
+            actual_val = y_true_list[idx]
+            pred_val = y_pred_list[idx]
+            is_correct = bool(str(actual_val) == str(pred_val))
+            if not is_correct:
+                incorrect_indices.append(idx)
+            
+            # Format row probabilities if available
+            row_probs: dict[str, float] | None = None
+            if y_proba is not None and idx < len(y_proba):
+                p_row = y_proba[idx]
+                if hasattr(p_row, "__len__") and len(p_row) == len(labels):
+                    row_probs = {labels_str[c_idx]: round(float(p_row[c_idx]), 4) for c_idx in range(len(labels))}
+                elif hasattr(p_row, "__len__") and len(p_row) == 1 and len(labels) == 2:
+                    pos_prob = float(p_row[0])
+                    row_probs = {labels_str[0]: round(1.0 - pos_prob, 4), labels_str[1]: round(pos_prob, 4)}
+                elif not hasattr(p_row, "__len__") and len(labels) == 2:
+                    pos_prob = float(p_row)
+                    row_probs = {labels_str[0]: round(1.0 - pos_prob, 4), labels_str[1]: round(pos_prob, 4)}
+            
+            # Native python type conversion
+            clean_actual = actual_val.item() if hasattr(actual_val, "item") else actual_val
+            clean_pred = pred_val.item() if hasattr(pred_val, "item") else pred_val
+
+            row_comparisons.append({
+                "row_index": idx,
+                "actual": clean_actual,
+                "predicted": clean_pred,
+                "correct": is_correct,
+                "probabilities": row_probs,
+            })
+
+        # Bounded sample for storage (first 50 + top 50 misclassified)
+        sample_rows: list[dict[str, Any]] = []
+        seen_indices = set()
+        for r in row_comparisons[:50]:
+            sample_rows.append(r)
+            seen_indices.add(r["row_index"])
+        
+        for idx in incorrect_indices[:50]:
+            if idx not in seen_indices:
+                sample_rows.append(row_comparisons[idx])
+                seen_indices.add(idx)
+
+        metrics["predictions"] = {
+            "total_rows": n_rows,
+            "correct_rows": n_rows - len(incorrect_indices),
+            "incorrect_rows": len(incorrect_indices),
+            "misclassification_rate": round(len(incorrect_indices) / max(1, n_rows), 4),
+            "sample_rows": sample_rows,
+            "has_probabilities": y_proba is not None,
+        }
+
         # Category Score Calculation (0-100)
         if roc_auc is not None:
             score = 0.4 * bacc + 0.3 * f1_macro + 0.3 * roc_auc
@@ -377,6 +438,52 @@ class PerformanceValidator(BaseValidator):
                     recommendation="Examine worst-case samples for target annotation errors or train with Huber/robust loss.",
                 )
             )
+
+        # --- Row-Level Prediction Comparisons (Deepchecks Regression Reference) ---
+        n_rows = len(y)
+        y_true_vals = np.asarray(y.values if hasattr(y, "values") else y, dtype=float)
+        y_pred_vals = np.asarray(y_pred, dtype=float)
+
+        row_comparisons: list[dict[str, Any]] = []
+        for idx in range(n_rows):
+            act = float(y_true_vals[idx])
+            prd = float(y_pred_vals[idx])
+            err = float(act - prd)
+            abs_err = float(abs(err))
+            pct_err = float((abs_err / abs(act)) * 100) if abs(act) > 1e-6 else None
+            
+            row_comparisons.append({
+                "row_index": idx,
+                "actual": round(act, 4),
+                "predicted": round(prd, 4),
+                "error": round(err, 4),
+                "abs_error": round(abs_err, 4),
+                "pct_error": round(pct_err, 2) if pct_err is not None else None,
+            })
+
+        # Identify rows with largest absolute errors
+        sorted_by_error = sorted(row_comparisons, key=lambda r: r["abs_error"], reverse=True)
+        top_error_indices = {r["row_index"] for r in sorted_by_error[:50]}
+
+        sample_rows: list[dict[str, Any]] = []
+        seen_indices = set()
+        for r in row_comparisons[:50]:
+            sample_rows.append(r)
+            seen_indices.add(r["row_index"])
+
+        for r in sorted_by_error[:50]:
+            if r["row_index"] not in seen_indices:
+                sample_rows.append(r)
+                seen_indices.add(r["row_index"])
+
+        metrics["predictions"] = {
+            "total_rows": n_rows,
+            "mean_error": round(float(np.mean(y_true_vals - y_pred_vals)), 4),
+            "median_abs_error": round(float(np.median(np.abs(y_true_vals - y_pred_vals))), 4),
+            "max_abs_error": round(float(np.max(np.abs(y_true_vals - y_pred_vals))), 4),
+            "sample_rows": sample_rows,
+            "has_probabilities": False,
+        }
 
         # Score calculation (0-100)
         if r2 <= 0.0:

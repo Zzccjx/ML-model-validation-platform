@@ -1,6 +1,6 @@
 """Validation run API routes."""
 import uuid
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -16,8 +16,13 @@ from app.schemas.validation import (
     CompatibilityCheckRequest,
     CompatibilityCheckResponse,
     ValidatorReadiness,
+    PredictionTableResponse,
+    RowPredictionItem,
+    ChartsResponse,
+    ChartDefinition,
 )
 from app.services import validation_service
+from app.services.visualization_service import generate_validation_charts, chart_to_csv
 from app.services.compatibility_service import check_compatibility
 from app.utils.model_utils import load_model_safely
 from app.utils.dataset_utils import load_dataset
@@ -191,6 +196,64 @@ async def get_validation_run(
     return await validation_service.get_validation_run(db, run_id)
 
 
+@router.get('/runs/{run_id}/predictions', response_model=PredictionTableResponse)
+async def get_run_predictions(
+    run_id: uuid.UUID,
+    filter: str = Query('all', description="'all', 'incorrect', or 'correct'"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Get row-level model prediction comparisons with pagination and filtering."""
+    run = await validation_service.get_validation_run(db, run_id)
+    cfg = run.config_json or {}
+    metrics = cfg.get('metrics', {})
+    perf = metrics.get('performance', {})
+    pred_data = perf.get('predictions', {})
+
+    task_type = 'regression' if 'r2' in perf else 'classification'
+    all_sample_rows: list[dict] = pred_data.get('sample_rows', [])
+
+    # Filter rows if requested
+    filtered = []
+    for r in all_sample_rows:
+        if filter == 'incorrect':
+            if task_type == 'classification' and r.get('correct') is False:
+                filtered.append(r)
+            elif task_type == 'regression' and r.get('abs_error', 0) > 0:
+                filtered.append(r)
+        elif filter == 'correct':
+            if task_type == 'classification' and r.get('correct') is True:
+                filtered.append(r)
+            elif task_type == 'regression' and r.get('abs_error', 0) == 0:
+                filtered.append(r)
+        else:
+            filtered.append(r)
+
+    paged_items = filtered[offset : offset + limit]
+
+    summary = {
+        'total_evaluated': pred_data.get('total_rows', len(all_sample_rows)),
+        'correct_count': pred_data.get('correct_rows'),
+        'incorrect_count': pred_data.get('incorrect_rows'),
+        'misclassification_rate': pred_data.get('misclassification_rate'),
+        'mean_error': pred_data.get('mean_error'),
+        'max_abs_error': pred_data.get('max_abs_error'),
+    }
+
+    return PredictionTableResponse(
+        total_rows=len(filtered),
+        returned_rows=len(paged_items),
+        offset=offset,
+        limit=limit,
+        task_type=task_type,
+        has_probabilities=bool(pred_data.get('has_probabilities', False)),
+        summary=summary,
+        items=[RowPredictionItem(**item) for item in paged_items],
+    )
+
+
 @router.get('/runs/{run_id}/findings', response_model=FindingListResponse)
 async def get_run_findings(
     run_id: uuid.UUID,
@@ -202,6 +265,7 @@ async def get_run_findings(
     """Get findings for a validation run."""
     findings = await validation_service.get_run_findings(db, run_id, severity, category)
     return FindingListResponse(findings=findings, total=len(findings))
+
 
 
 @router.get('/findings', response_model=FindingListResponse)
@@ -216,3 +280,47 @@ async def list_findings(
     """List cross-run findings with optional filtering."""
     findings = await validation_service.list_findings(db, project_id, severity, category, limit)
     return FindingListResponse(findings=findings, total=len(findings))
+
+
+@router.get('/runs/{run_id}/charts', response_model=ChartsResponse)
+async def get_run_charts(
+    run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Generate structured visual analytics charts for all evaluated validation modules."""
+    run = await validation_service.get_validation_run(db, run_id)
+    charts = generate_validation_charts(run)
+    categories = sorted(list(set(c.category for c in charts)))
+    return ChartsResponse(
+        run_id=run.id,
+        run_number=run.run_number,
+        total_charts=len(charts),
+        categories=categories,
+        charts=charts,
+    )
+
+
+@router.get('/runs/{run_id}/charts/{chart_id}/export-csv')
+async def export_chart_csv(
+    run_id: uuid.UUID,
+    chart_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Export tabular data backing a specific chart as CSV."""
+    run = await validation_service.get_validation_run(db, run_id)
+    charts = generate_validation_charts(run)
+    matching = next((c for c in charts if c.chart_id == chart_id), None)
+    if not matching:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Chart '{chart_id}' not found for validation run {run_id}",
+        )
+    csv_content = chart_to_csv(matching)
+    filename = f"{run.run_number}_{chart_id}.csv"
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

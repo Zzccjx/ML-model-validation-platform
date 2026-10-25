@@ -5,6 +5,7 @@ interface ScoreCardProps {
   score: number | null;
   icon?: React.ReactNode;
   color?: string;
+  statusLabel?: string;
 }
 
 function getScoreColor(score: number): string {
@@ -21,10 +22,10 @@ function getScoreBg(score: number): string {
   return 'bg-red-50 border-red-200';
 }
 
-export default function ScoreCard({ label, score, icon }: ScoreCardProps) {
-  const displayScore = score !== null ? Math.round(score) : '—';
-  const colorClass = score !== null ? getScoreColor(score) : 'text-gray-400';
-  const bgClass = score !== null ? getScoreBg(score) : 'bg-gray-50 border-gray-200';
+export default function ScoreCard({ label, score, icon, statusLabel }: ScoreCardProps) {
+  const displayScore = score !== null ? Math.round(score) : (statusLabel ? statusLabel.replace('_', ' ') : '—');
+  const colorClass = score !== null ? getScoreColor(score) : 'text-slate-500';
+  const bgClass = score !== null ? getScoreBg(score) : 'bg-slate-50 border-slate-200';
 
   return (
     <div className={`rounded-lg border p-4 ${bgClass}`}>
@@ -32,9 +33,17 @@ export default function ScoreCard({ label, score, icon }: ScoreCardProps) {
         <span className="text-sm font-medium text-gray-600">{label}</span>
         {icon && <span className="text-gray-400">{icon}</span>}
       </div>
-      <div className={`text-3xl font-bold ${colorClass}`}>
-        {displayScore}
-        {score !== null && <span className="text-sm font-normal text-gray-400"> / 100</span>}
+      <div className={`text-2xl font-bold ${colorClass}`}>
+        {score !== null ? (
+          <>
+            {Math.round(score)}
+            <span className="text-xs font-normal text-gray-400"> / 100</span>
+          </>
+        ) : (
+          <span className="text-xs font-semibold uppercase px-2 py-0.5 rounded bg-slate-200/80 text-slate-600 tracking-wider">
+            {statusLabel ? statusLabel.replace('_', ' ') : 'Not Evaluated'}
+          </span>
+        )}
       </div>
     </div>
   );

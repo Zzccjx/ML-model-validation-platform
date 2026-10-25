@@ -1,4 +1,4 @@
-﻿"""Tests for Module 1: Model Performance Validator."""
+"""Tests for Module 1: Model Performance Validator."""
 import pytest
 import numpy as np
 import pandas as pd
@@ -183,3 +183,58 @@ async def test_accuracy_paradox_finding():
     disparity_findings = [f for f in result.findings if "Accuracy Paradox" in f.title]
     assert len(disparity_findings) == 1
     assert disparity_findings[0].severity == "high"
+
+
+@pytest.mark.asyncio
+async def test_classification_row_level_predictions(binary_classification_setup):
+    """Deepchecks reference: Verify that row-level predictions match independent calculation."""
+    validator = PerformanceValidator()
+    result = await validator.safe_validate(binary_classification_setup)
+    
+    assert "predictions" in result.metrics
+    preds = result.metrics["predictions"]
+    assert preds["total_rows"] == 200
+    assert preds["has_probabilities"] is True
+    assert "sample_rows" in preds
+    
+    # Check first row matches model.predict and predict_proba exactly
+    df = binary_classification_setup.dataset
+    target = binary_classification_setup.target_column
+    X = df[binary_classification_setup.feature_columns]
+    y_true = df[target].values
+    
+    raw_pred = binary_classification_setup.model.predict(X)
+    raw_proba = binary_classification_setup.model.predict_proba(X)
+    
+    first_sample = preds["sample_rows"][0]
+    assert first_sample["actual"] == int(y_true[0])
+    assert first_sample["predicted"] == int(raw_pred[0])
+    assert first_sample["correct"] == bool(y_true[0] == raw_pred[0])
+    assert "0" in first_sample["probabilities"]
+    assert "1" in first_sample["probabilities"]
+    assert pytest.approx(first_sample["probabilities"]["1"], 0.001) == raw_proba[0, 1]
+
+
+@pytest.mark.asyncio
+async def test_regression_row_level_predictions(regression_setup):
+    """Deepchecks reference: Verify that regression row-level predictions and errors match independent calculation."""
+    validator = PerformanceValidator()
+    result = await validator.safe_validate(regression_setup)
+    
+    assert "predictions" in result.metrics
+    preds = result.metrics["predictions"]
+    assert preds["total_rows"] == 150
+    assert "sample_rows" in preds
+    
+    df = regression_setup.dataset
+    target = regression_setup.target_column
+    X = df[regression_setup.feature_columns]
+    y_true = df[target].values
+    raw_pred = regression_setup.model.predict(X)
+    
+    first_sample = preds["sample_rows"][0]
+    assert pytest.approx(first_sample["actual"], 0.001) == float(y_true[0])
+    assert pytest.approx(first_sample["predicted"], 0.001) == float(raw_pred[0])
+    assert pytest.approx(first_sample["error"], 0.001) == float(y_true[0] - raw_pred[0])
+    assert pytest.approx(first_sample["abs_error"], 0.001) == abs(float(y_true[0] - raw_pred[0]))
+

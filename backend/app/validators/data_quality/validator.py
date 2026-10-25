@@ -1,4 +1,4 @@
-﻿"""Data Quality Validator module.
+"""Data Quality Validator module.
 
 Analyzes dataset integrity, missing value rates, duplicate rows/columns,
 feature variance, numerical extremes, outliers, class balance, and potential
@@ -308,17 +308,22 @@ class DataQualityValidator(BaseValidator):
                                     leakage_cols.append((col, round(corr, 4)))
 
         metrics["potential_leakage_columns"] = leakage_cols
+        metrics["leakage_assessment"] = (
+            f"Detected {len(leakage_cols)} potential leakage feature(s)."
+            if leakage_cols
+            else "No leakage indicators detected by implemented checks."
+        )
         for col, corr_val in leakage_cols:
             sev = "critical" if corr_val >= 0.98 else "high"
             findings.append(
                 ValidationFinding(
                     severity=sev,
                     category="data_quality",
-                    title=f"Potential Data Leakage Detected: '{col}' (|r|={corr_val})",
+                    title=f"Potential Data Leakage Indicator: '{col}' (|r|={corr_val})",
                     description=(
                         f"Feature '{col}' exhibits an extraordinarily high linear association ({corr_val}) "
                         f"with target '{target_col}'. This indicates potential target leakage, duplicate target column, "
-                        "or a variable recorded post-decision."
+                        "or a variable recorded post-decision. Note: Empirical checks test linear/monotonic proxy signals; domain inspection required."
                     ),
                     metric_name=f"Correlation ({col} ~ {target_col})",
                     metric_value=corr_val,

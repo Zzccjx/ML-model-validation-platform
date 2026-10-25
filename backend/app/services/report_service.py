@@ -256,6 +256,17 @@ def build_report_data(
             "disclaimer": "This report provides empirical assurance metrics and does not constitute a legal certification of fitness for automated decisions.",
         },
     }
+
+    try:
+        from app.services.visualization_service import generate_validation_charts
+        charts = generate_validation_charts(run)
+        report["visual_analytics"] = {
+            "total_charts": len(charts),
+            "charts": [c.model_dump() for c in charts],
+        }
+    except Exception as e:
+        report["visual_analytics"] = {"total_charts": 0, "charts": [], "error": str(e)}
+
     return report
 
 
@@ -359,7 +370,10 @@ def generate_pdf_report(
     for i, (k, label) in enumerate(pillar_names):
         sc = cat_scores.get(k)
         sc_str = f"{sc:.1f}" if isinstance(sc, (int, float)) else "N/A"
-        st = "OPTIMAL" if isinstance(sc, (int, float)) and sc >= 85 else ("WARNING" if isinstance(sc, (int, float)) and sc >= 70 else "CRITICAL")
+        if isinstance(sc, (int, float)):
+            st = "OPTIMAL" if sc >= 85 else ("WARNING" if sc >= 70 else "CRITICAL")
+        else:
+            st = "NOT EVALUATED"
         pdf.table_row([(label, 70, "L"), (sc_str, 40, "C"), (st, 80, "L")], fill=(i % 2 == 1))
     pdf.ln(2)
 
@@ -369,16 +383,59 @@ def generate_pdf_report(
     # 5. Performance
     pdf.section_title(5, "Performance & Accuracy Metrics (Module 1)")
     p_metrics = data["section_5_performance"]["metrics"]
-    pdf.table_header([("Metric Name", 60), ("Calculated Value", 40), ("Guideline / Benchmark", 90)])
-    p_rows = [
-        ("Accuracy", str(p_metrics.get("accuracy", "N/A")), "Baseline accuracy threshold"),
-        ("F1 Macro", str(p_metrics.get("f1_macro", "N/A")), "Macro balanced F1 score across classes"),
-        ("ROC-AUC", str(p_metrics.get("roc_auc", "N/A")), "Discriminative area under ROC curve"),
-        ("PR-AUC", str(p_metrics.get("pr_auc", "N/A")), "Precision-recall curve area"),
-    ]
+    if "r2" in p_metrics:
+        # Regression metrics
+        pdf.table_header([("Regression Metric Name", 60), ("Calculated Value", 40), ("Guideline / Benchmark", 90)])
+        p_rows = [
+            ("R² Explanatory Power", str(p_metrics.get("r2", "N/A")), "R² >= 0.70 desired (flagged if < 0.50)"),
+            ("Mean Absolute Error (MAE)", str(p_metrics.get("mae", "N/A")), "Lower is better; average error magnitude"),
+            ("Root Mean Squared Error (RMSE)", str(p_metrics.get("rmse", "N/A")), "Penalizes large outlier errors"),
+            ("Mean Absolute Percentage Error (MAPE)", f"{p_metrics.get('mape', 'N/A')}%" if p_metrics.get("mape") is not None else "N/A", "MAPE <= 20% well-fitted"),
+        ]
+    else:
+        # Classification metrics
+        pdf.table_header([("Classification Metric Name", 60), ("Calculated Value", 40), ("Guideline / Benchmark", 90)])
+        p_rows = [
+            ("Accuracy", str(p_metrics.get("accuracy", "N/A")), "Baseline accuracy threshold"),
+            ("F1 Macro", str(p_metrics.get("f1_macro", "N/A")), "Macro balanced F1 score across classes"),
+            ("ROC-AUC", str(p_metrics.get("roc_auc", "N/A")), "Discriminative area under ROC curve"),
+            ("PR-AUC", str(p_metrics.get("pr_auc", "N/A")), "Precision-recall curve area"),
+        ]
     for i, (m, v, b) in enumerate(p_rows):
         pdf.table_row([(m, 60, "L"), (v, 40, "C"), (b, 90, "L")], fill=(i % 2 == 1))
     pdf.ln(2)
+
+    # Prediction Diagnostics Sample Table (Deepchecks Reference)
+    pred_info = p_metrics.get("predictions", {})
+    sample_rows = pred_info.get("sample_rows", [])
+    if sample_rows:
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.set_text_color(30, 41, 59)
+        pdf.cell(0, 5, "Sample Row-Level Prediction Comparisons:", new_x="LMARGIN", new_y="NEXT")
+        if "r2" in p_metrics:
+            pdf.table_header([("Row #", 25), ("Actual Value", 45), ("Predicted Value", 45), ("Absolute Error", 40), ("Percent Error", 35)])
+            for j, s_row in enumerate(sample_rows[:6]):
+                pdf.table_row([
+                    (str(s_row.get("row_index", j)), 25, "C"),
+                    (str(s_row.get("actual", "")), 45, "C"),
+                    (str(s_row.get("predicted", "")), 45, "C"),
+                    (str(s_row.get("abs_error", "")), 40, "C"),
+                    (f"{s_row.get('pct_error', '')}%" if s_row.get("pct_error") is not None else "N/A", 35, "C"),
+                ], fill=(j % 2 == 1))
+        else:
+            pdf.table_header([("Row #", 25), ("Actual Label", 50), ("Predicted Label", 50), ("Status", 35), ("Top Probability", 30)])
+            for j, s_row in enumerate(sample_rows[:6]):
+                st_label = "CORRECT" if s_row.get("correct") else "MISCLASSIFIED"
+                probs = s_row.get("probabilities")
+                top_p = f"{max(probs.values()):.2f}" if probs else "N/A"
+                pdf.table_row([
+                    (str(s_row.get("row_index", j)), 25, "C"),
+                    (str(s_row.get("actual", "")), 50, "C"),
+                    (str(s_row.get("predicted", "")), 50, "C"),
+                    (st_label, 35, "C"),
+                    (top_p, 30, "C"),
+                ], fill=(j % 2 == 1))
+        pdf.ln(2)
 
     # 6. Data Quality
     pdf.section_title(6, "Data Quality & Schema Health (Module 2)")
@@ -397,28 +454,49 @@ def generate_pdf_report(
     # 7. Fairness
     pdf.section_title(7, "Fairness & Disparate Impact (Module 3)")
     f_metrics = data["section_7_fairness"]["metrics"]
-    pdf.table_header([("Fairness Metric", 60), ("Value", 40), ("EEOC Standard Threshold", 90)])
-    fn_rows = [
-        ("Disparate Impact Ratio", str(f_metrics.get("disparate_impact_ratio", "N/A")), ">= 0.80 (EEOC Four-Fifths Rule)"),
-        ("Demographic Parity Diff", str(f_metrics.get("demographic_parity_difference", "N/A")), "<= 0.10 desired boundary"),
-        ("Equal Opportunity Diff", str(f_metrics.get("equal_opportunity_difference", "N/A")), "<= 0.10 true positive rate parity"),
-        ("Small Sample Warnings", str(len(f_metrics.get("small_subgroup_warnings", []))), "Flagged subgroups with N < 30"),
-    ]
-    for i, (m, v, b) in enumerate(fn_rows):
-        pdf.table_row([(m, 60, "L"), (v, 40, "C"), (b, 90, "L")], fill=(i % 2 == 1))
+    f_attrs = f_metrics.get("attributes", {})
+    if f_metrics.get("_status") in ("not_evaluated", "unsupported", "skipped") or not f_attrs:
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(100, 116, 139)
+        expl = f_metrics.get("_explanation") or "Prerequisites missing: Sensitive demographic attributes were not configured or detected for this validation run."
+        status_lbl = f_metrics.get("_status_label", "NOT EVALUATED")
+        pdf.multi_cell(0, 5, pdf.clean_text(f"[{status_lbl}] {expl}"))
+    else:
+        pdf.table_header([("Sensitive Attribute", 50), ("Disparate Impact", 40), ("Parity Diff", 40), ("Equal Opportunity", 60)])
+        for i, (attr_name, attr_data) in enumerate(f_attrs.items()):
+            di_str = str(attr_data.get("disparate_impact_ratio", "N/A"))
+            dp_str = str(attr_data.get("demographic_parity_difference", "N/A"))
+            eo_str = str(attr_data.get("equal_opportunity_difference", "N/A"))
+            pdf.table_row([
+                (attr_name[:22], 50, "L"),
+                (di_str, 40, "C"),
+                (dp_str, 40, "C"),
+                (eo_str, 60, "C"),
+            ], fill=(i % 2 == 1))
     pdf.ln(2)
 
     # 8. Drift
     pdf.section_title(8, "Data & Prediction Drift (Module 4)")
     d_metrics = data["section_8_drift"]["metrics"]
-    pdf.table_header([("Drift Indicator", 60), ("Score", 40), ("Drift Interpretation", 90)])
-    dr_rows = [
-        ("Drifted Features Count", str(d_metrics.get("drifted_features_count", "0")), "Features with KS-test p < 0.05 or PSI > 0.10"),
-        ("Max Population Stability Index", str(d_metrics.get("max_psi", "0.0")), "PSI < 0.10 (Stable), PSI > 0.25 (Action)"),
-        ("Prediction Drift Detected", str(d_metrics.get("prediction_drift_detected", "False")), "Output distribution shift between splits"),
-    ]
-    for i, (m, v, b) in enumerate(dr_rows):
-        pdf.table_row([(m, 60, "L"), (v, 40, "C"), (b, 90, "L")], fill=(i % 2 == 1))
+    if d_metrics.get("_status") in ("not_evaluated", "unsupported", "skipped") or not d_metrics:
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(100, 116, 139)
+        expl = d_metrics.get("_explanation") or "Prerequisites missing: Baseline reference dataset was not provided for drift evaluation."
+        status_lbl = d_metrics.get("_status_label", "NOT EVALUATED")
+        pdf.multi_cell(0, 5, pdf.clean_text(f"[{status_lbl}] {expl}"))
+    else:
+        is_split = d_metrics.get("is_sequential_partition", False)
+        mode_str = "Internal Split Diagnostic (Exploratory)" if is_split else "Reference Baseline Comparison"
+        pdf.table_header([("Drift Indicator", 60), ("Score", 40), ("Interpretation / Benchmark", 90)])
+        dr_rows = [
+            ("Evaluation Mode", mode_str, "Separate baseline required for verified production drift"),
+            ("Overall Drift Status", str(d_metrics.get("overall_drift_status", "stable")).upper(), "PSI < 0.10 Stable | 0.10-0.25 Moderate | >= 0.25 High"),
+            ("Drifted Features Count", f"{d_metrics.get('drifted_features_count', 0)} / {d_metrics.get('total_features_evaluated', 0)}", f"{d_metrics.get('drifted_features_percentage', 0)}% of features flagged"),
+            ("Max Population Stability Index", str(d_metrics.get("max_psi", 0.0)), "PSI < 0.10 (Stable), PSI >= 0.25 (High Drift)"),
+            ("Prediction Output Shift", str(d_metrics.get("concept_drift", {}).get("concept_drift_detected", False)), f"Pred PSI: {d_metrics.get('concept_drift', {}).get('prediction_psi', 'N/A')}"),
+        ]
+        for i, (m, v, b) in enumerate(dr_rows):
+            pdf.table_row([(m, 60, "L"), (v, 40, "C"), (b, 90, "L")], fill=(i % 2 == 1))
     pdf.ln(2)
 
     # 9. Robustness
@@ -441,6 +519,7 @@ def generate_pdf_report(
     exp_metrics = data["section_10_explainability"]["metrics"]
     pdf.table_header([("Attribution Dimension", 60), ("Observed Value", 40), ("Design Interpretation", 90)])
     exp_rows = [
+        ("Attribution Method", str(exp_metrics.get("attribution_method", "SHAP")).replace("_", " ").upper(), "Explainability framework (SHAP Tree / Linear / Permutation)"),
         ("Primary Feature Share", f"{exp_metrics.get('top_feature_share_percentage', 0.0):.1f}%", "< 60% balanced (flagged if > 60%)"),
         ("Top Feature Name", str(exp_metrics.get("top_feature_name", "None")), "Dominant single driver of decisions"),
         ("Top 3 Features Share", f"{exp_metrics.get('top_3_share_percentage', 0.0):.1f}%", "Concentration of attribution"),
@@ -522,8 +601,9 @@ def generate_pdf_report(
         0,
         4,
         "DISCLAIMER: This automated assurance report is generated for diagnostic, validation, and governance purposes. "
-        "Metrics reflect the statistical properties of the submitted dataset and model file at execution time. "
-        "It does not guarantee model performance under distribution shifts not represented in the validation dataset. "
+        "Metrics reflect empirical evaluation on the submitted test dataset and model file at execution time. "
+        "Passing evaluation on this dataset confirms performance under observed data distributions, but does not guarantee "
+        "flawless predictions or error-free execution on future, out-of-distribution, or adversarial production inputs. "
         "AI/ML Validation Platform 2026.",
     )
 

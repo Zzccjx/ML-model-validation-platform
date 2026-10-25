@@ -44,6 +44,20 @@ async def upload_dataset(
                     target_column = candidate
                     break
 
+        if not sensitive_columns:
+            # Auto-detect demographic candidates with discrete cardinality (2 - 20 groups)
+            candidate_keywords = ['gender', 'sex', 'race', 'ethnicity', 'age_group', 'region', 'country', 'marital_status']
+            auto_sensitive = []
+            for col in df.columns:
+                if col == target_column:
+                    continue
+                c_lower = str(col).lower()
+                if any(kw in c_lower for kw in candidate_keywords):
+                    if 2 <= df[col].nunique(dropna=True) <= 20:
+                        auto_sensitive.append(col)
+            if auto_sensitive:
+                sensitive_columns = auto_sensitive
+
         if target_column:
             target_result = validate_target_column(df, target_column)
             if not target_result['valid']:

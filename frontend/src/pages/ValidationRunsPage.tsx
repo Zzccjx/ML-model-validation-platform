@@ -592,7 +592,7 @@ export default function ValidationRunsPage() {
                             <Cpu className="h-4 w-4 text-slate-500" />
                             <div>
                               <p className="font-semibold text-gray-900">{currentModelObj.name}</p>
-                              <p className="text-gray-500">{currentModelObj.filename} • {(currentModelObj.file_size / 1024).toFixed(1)} KB • {currentModelObj.framework || 'scikit-learn'}</p>
+                              <p className="text-gray-500">{currentModelObj.filename} • {currentModelObj.file_size != null ? `${(currentModelObj.file_size / 1024).toFixed(1)} KB` : ''} • {currentModelObj.framework || 'scikit-learn'}</p>
                             </div>
                           </div>
                           <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs font-medium">✓ Ready</span>
@@ -819,10 +819,10 @@ export default function ValidationRunsPage() {
                               <div><span className="text-gray-500">Task Type:</span> <strong className="text-gray-900 capitalize">{modelInspect.model_type || 'Classification'}</strong></div>
                               <div><span className="text-gray-500">Expected Features:</span> <strong className="text-gray-900">{modelInspect.feature_count ?? (modelInspect.input_shape ? modelInspect.input_shape : 'Dynamic')}</strong></div>
                               <div><span className="text-gray-500">Probability Outputs:</span> <strong className={modelInspect.has_predict_proba ? 'text-green-700' : 'text-amber-700'}>{modelInspect.has_predict_proba ? 'Supported' : 'Not Supported'}</strong></div>
-                              {modelInspect.total_parameters !== undefined && (
+                              {typeof modelInspect.total_parameters === 'number' && (
                                 <div><span className="text-gray-500">Total Parameters:</span> <strong className="text-gray-900">{modelInspect.total_parameters.toLocaleString()}</strong></div>
                               )}
-                              {modelInspect.layer_count !== undefined && (
+                              {modelInspect.layer_count != null && (
                                 <div><span className="text-gray-500">Layers:</span> <strong className="text-gray-900">{modelInspect.layer_count}</strong></div>
                               )}
                               {modelInspect.input_shape && (

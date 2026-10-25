@@ -118,4 +118,61 @@ export interface AuthTokens {
   token_type: string;
 }
 
+export interface ChartAxis {
+  key: string;
+  label: string;
+  type?: string;
+  unit?: string | null;
+}
+
+export interface ChartSeries {
+  key: string;
+  label: string;
+  color?: string | null;
+  type?: string | null;
+}
+
+export interface ChartThreshold {
+  value: number;
+  label: string;
+  color?: string;
+  style?: string;
+}
+
+export interface ChartProvenance {
+  source_validator: string;
+  status: 'EVALUATED' | 'NOT_EVALUATED' | 'UNSUPPORTED';
+  sample_count?: number | null;
+  note?: string | null;
+}
+
+export interface ChartDefinition {
+  chart_id: string;
+  title: string;
+  description: string;
+  category: string;
+  chart_type: 'bar' | 'line' | 'scatter' | 'heatmap' | 'histogram';
+  status: 'EVALUATED' | 'NOT_EVALUATED' | 'UNSUPPORTED';
+  x_axis: ChartAxis;
+  y_axis: ChartAxis;
+  series: ChartSeries[];
+  data: Record<string, any>[];
+  matrix?: {
+    labels: string[];
+    raw_matrix: number[][];
+    normalized_matrix: number[][];
+  } | null;
+  thresholds?: ChartThreshold[];
+  interpretation?: string | null;
+  provenance: ChartProvenance;
+}
+
+export interface ChartsResponse {
+  run_id: string;
+  run_number: string;
+  total_charts: number;
+  categories: string[];
+  charts: ChartDefinition[];
+}
+
 

@@ -1,30 +1,39 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../services/api';
-import { ValidationRun, Finding } from '../types';
+import { ValidationRun, Finding, ChartDefinition, ChartsResponse } from '../types';
 import StatusBadge from '../components/StatusBadge';
 import ScoreCard from '../components/ScoreCard';
 import SeverityBadge from '../components/SeverityBadge';
-import { ArrowLeft, CheckCircle, AlertTriangle, Activity, BarChart2, Database, ShieldAlert, Scale, Users, Wind, ShieldCheck, Sparkles, Download, FileText, Gauge } from 'lucide-react';
+import ChartCard from '../components/charts/ChartCard';
+import { ArrowLeft, CheckCircle, AlertTriangle, Activity, BarChart2, Database, ShieldAlert, Scale, Users, Wind, ShieldCheck, Sparkles, Download, FileText, Gauge, Info, PieChart } from 'lucide-react';
 
 export default function ValidationRunDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [run, setRun] = useState<ValidationRun | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [charts, setCharts] = useState<ChartDefinition[]>([]);
+  const [activeViewTab, setActiveViewTab] = useState<'overview' | 'visual_analytics' | 'findings' | 'predictions'>('overview');
+  const [selectedChartCategory, setSelectedChartCategory] = useState<string>('all');
   const [selectedSeverity, setSelectedSeverity] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [downloadingJson, setDownloadingJson] = useState(false);
+  const [predictionFilter, setPredictionFilter] = useState<'all' | 'incorrect' | 'correct'>('all');
+  const [predictionSearch, setPredictionSearch] = useState('');
+  const [predictionPage, setPredictionPage] = useState(1);
 
   useEffect(() => {
     if (!id) return;
     Promise.all([
       api.get<ValidationRun>(`/validation/runs/${id}`),
       api.get<{ findings: Finding[]; total: number }>(`/validation/runs/${id}/findings`),
+      api.get<ChartsResponse>(`/validation/runs/${id}/charts`).catch(() => ({ data: { charts: [] } })),
     ])
-      .then(([runRes, findingsRes]) => {
+      .then(([runRes, findingsRes, chartsRes]) => {
         setRun(runRes.data);
         setFindings(findingsRes.data.findings || []);
+        setCharts((chartsRes as any)?.data?.charts || []);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -34,6 +43,7 @@ export default function ValidationRunDetailPage() {
   if (!run) return <div className="p-12 text-center text-red-500">Validation run not found.</div>;
 
   const categoryScores = run.category_scores_json || {};
+  const validatorStatuses = run.config_json?.validator_statuses || {};
   const perfMetrics = run.config_json?.metrics?.performance || {};
   const dqMetrics = run.config_json?.metrics?.data_quality || {};
   const fairnessMetrics = run.config_json?.metrics?.fairness || null;
@@ -99,6 +109,11 @@ export default function ValidationRunDetailPage() {
     ? findings
     : findings.filter(f => f.severity.toLowerCase() === selectedSeverity.toLowerCase());
 
+  const getCategoryCharts = (cat: string) => charts.filter((c) => c.category === cat);
+  const filteredCharts = selectedChartCategory === 'all'
+    ? charts
+    : charts.filter((c) => c.category === selectedChartCategory);
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       {/* Navigation & Header */}
@@ -154,17 +169,66 @@ export default function ValidationRunDetailPage() {
           <ScoreCard label="Model Health Score" score={run.overall_score} />
         </div>
         <div className="md:col-span-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <ScoreCard label="Performance" score={categoryScores.performance ?? null} />
-          <ScoreCard label="Data Quality" score={categoryScores.data_quality ?? null} />
-          <ScoreCard label="Fairness" score={categoryScores.fairness ?? null} />
-          <ScoreCard label="Drift" score={categoryScores.drift ?? null} />
-          <ScoreCard label="Robustness" score={categoryScores.robustness ?? null} />
-          <ScoreCard label="Explainability" score={categoryScores.explainability ?? null} />
-          <ScoreCard label="Reliability" score={categoryScores.reliability ?? null} />
+          <ScoreCard label="Performance" score={categoryScores.performance ?? null} statusLabel={validatorStatuses.performance?.status_label} />
+          <ScoreCard label="Data Quality" score={categoryScores.data_quality ?? null} statusLabel={validatorStatuses.data_quality?.status_label} />
+          <ScoreCard label="Fairness" score={categoryScores.fairness ?? null} statusLabel={validatorStatuses.fairness?.status_label} />
+          <ScoreCard label="Drift" score={categoryScores.drift ?? null} statusLabel={validatorStatuses.drift?.status_label} />
+          <ScoreCard label="Robustness" score={categoryScores.robustness ?? null} statusLabel={validatorStatuses.robustness?.status_label} />
+          <ScoreCard label="Explainability" score={categoryScores.explainability ?? null} statusLabel={validatorStatuses.explainability?.status_label} />
+          <ScoreCard label="Reliability" score={categoryScores.reliability ?? null} statusLabel={validatorStatuses.reliability?.status_label} />
         </div>
       </div>
 
-      {/* Module 1: Classification Performance Diagnostics */}
+      {/* Primary Navigation Tabs */}
+      <div className="flex flex-wrap border-b border-gray-200 gap-1 bg-white p-1 rounded-lg border shadow-xs">
+        <button
+          onClick={() => setActiveViewTab('overview')}
+          className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
+            activeViewTab === 'overview'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+          }`}
+        >
+          <Activity className="w-4 h-4" />
+          Validation Pillars Overview
+        </button>
+        <button
+          onClick={() => setActiveViewTab('visual_analytics')}
+          className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
+            activeViewTab === 'visual_analytics'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+          }`}
+        >
+          <BarChart2 className="w-4 h-4" />
+          Interactive Visual Analytics ({charts.length})
+        </button>
+        <button
+          onClick={() => setActiveViewTab('predictions')}
+          className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
+            activeViewTab === 'predictions'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+          }`}
+        >
+          <Database className="w-4 h-4" />
+          Row Predictions
+        </button>
+        <button
+          onClick={() => setActiveViewTab('findings')}
+          className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md transition-colors ${
+            activeViewTab === 'findings'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+          }`}
+        >
+          <AlertTriangle className="w-4 h-4" />
+          Findings & Audit Inventory ({findings.length})
+        </button>
+      </div>
+
+      {activeViewTab === 'overview' && (
+        <div className="space-y-6">
       {isClassification && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
@@ -274,6 +338,133 @@ export default function ValidationRunDetailPage() {
                 </div>
               </div>
             </div>
+
+            {/* Interactive Performance Charts */}
+            {getCategoryCharts('performance').length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Visual Analytics — Performance & Error Dynamics
+                </h4>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {getCategoryCharts('performance').map((chart) => (
+                    <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Row-Level Prediction Comparisons Table (Deepchecks Reference) */}
+            {perfMetrics.predictions?.sample_rows && (
+              <div className="border border-gray-200 rounded-lg p-4 bg-white">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-800">
+                      Row-Level Prediction Comparison Table
+                    </h4>
+                    <p className="text-xs text-gray-500">
+                      Ground truth vs model predictions ({perfMetrics.predictions.total_rows} evaluated, {perfMetrics.predictions.incorrect_rows} misclassified)
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="inline-flex rounded-md shadow-xs" role="group">
+                      <button
+                        type="button"
+                        onClick={() => { setPredictionFilter('all'); setPredictionPage(1); }}
+                        className={`px-2.5 py-1 text-xs font-medium rounded-l-md border ${
+                          predictionFilter === 'all'
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        All ({perfMetrics.predictions.sample_rows.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setPredictionFilter('incorrect'); setPredictionPage(1); }}
+                        className={`px-2.5 py-1 text-xs font-medium border-t border-b border-r ${
+                          predictionFilter === 'incorrect'
+                            ? 'bg-red-600 text-white border-red-600'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        Misclassified Only
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setPredictionFilter('correct'); setPredictionPage(1); }}
+                        className={`px-2.5 py-1 text-xs font-medium rounded-r-md border-t border-b border-r ${
+                          predictionFilter === 'correct'
+                            ? 'bg-green-600 text-white border-green-600'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        Correct Only
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                  <table className="min-w-full text-xs divide-y divide-gray-200">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium text-gray-600">Row #</th>
+                        <th className="px-3 py-2 text-left font-medium text-gray-600">Actual Label</th>
+                        <th className="px-3 py-2 text-left font-medium text-gray-600">Predicted Label</th>
+                        <th className="px-3 py-2 text-center font-medium text-gray-600">Result</th>
+                        <th className="px-3 py-2 text-left font-medium text-gray-600">Predicted Probabilities</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {perfMetrics.predictions.sample_rows
+                        .filter((r: any) => {
+                          if (predictionFilter === 'incorrect') return r.correct === false;
+                          if (predictionFilter === 'correct') return r.correct === true;
+                          return true;
+                        })
+                        .map((row: any) => (
+                          <tr key={row.row_index} className={row.correct ? 'hover:bg-gray-50' : 'bg-red-50/50 hover:bg-red-50'}>
+                            <td className="px-3 py-2 text-gray-500 font-mono">#{row.row_index}</td>
+                            <td className="px-3 py-2 font-semibold text-gray-900">{String(row.actual)}</td>
+                            <td className="px-3 py-2 font-semibold text-gray-900">{String(row.predicted)}</td>
+                            <td className="px-3 py-2 text-center">
+                              {row.correct ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-green-100 text-green-800">
+                                  Correct
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-red-100 text-red-800">
+                                  Incorrect
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-gray-600 font-mono text-[11px]">
+                              {row.probabilities ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {Object.entries(row.probabilities).map(([cls, prob]: [string, any]) => (
+                                    <span
+                                      key={cls}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] ${
+                                        String(cls) === String(row.predicted)
+                                          ? 'bg-blue-100 text-blue-800 font-bold'
+                                          : 'bg-gray-100 text-gray-600'
+                                      }`}
+                                    >
+                                      {cls}: {(prob * 100).toFixed(1)}%
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-gray-400 italic">Not available (no predict_proba)</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -360,6 +551,60 @@ export default function ValidationRunDetailPage() {
                       <div className="font-mono font-semibold">{perfMetrics.residuals.quantiles?.p99}</div>
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* Row-Level Regression Prediction Comparisons Table (Deepchecks Reference) */}
+            {perfMetrics.predictions?.sample_rows && (
+              <div className="border border-gray-200 rounded-lg p-4 bg-white">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-800">
+                      Row-Level Regression Prediction & Error Comparison
+                    </h4>
+                    <p className="text-xs text-gray-500">
+                      Evaluated sample diagnostics ({perfMetrics.predictions.total_rows} total rows, Mean Error={perfMetrics.predictions.mean_error}, Max Abs Error={perfMetrics.predictions.max_abs_error})
+                    </p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                  <table className="min-w-full text-xs divide-y divide-gray-200">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium text-gray-600">Row #</th>
+                        <th className="px-3 py-2 text-right font-medium text-gray-600">Actual Value</th>
+                        <th className="px-3 py-2 text-right font-medium text-gray-600">Predicted Value</th>
+                        <th className="px-3 py-2 text-right font-medium text-gray-600">Error (Actual - Pred)</th>
+                        <th className="px-3 py-2 text-right font-medium text-gray-600">Abs Error</th>
+                        <th className="px-3 py-2 text-right font-medium text-gray-600">% Error</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {perfMetrics.predictions.sample_rows.map((row: any) => {
+                        const isHighError = perfMetrics.rmse && row.abs_error > 2.0 * perfMetrics.rmse;
+                        return (
+                          <tr key={row.row_index} className={isHighError ? 'bg-amber-50/60 hover:bg-amber-50' : 'hover:bg-gray-50'}>
+                            <td className="px-3 py-2 text-gray-500 font-mono">#{row.row_index}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-gray-900 font-mono">{Number(row.actual).toFixed(4)}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-gray-900 font-mono">{Number(row.predicted).toFixed(4)}</td>
+                            <td className="px-3 py-2 text-right font-mono">
+                              <span className={row.error < 0 ? 'text-blue-600' : 'text-red-600'}>
+                                {Number(row.error).toFixed(4)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono font-medium text-gray-800">
+                              {Number(row.abs_error).toFixed(4)}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono text-gray-600">
+                              {row.pct_error !== null ? `${Number(row.pct_error).toFixed(2)}%` : 'N/A'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
@@ -467,12 +712,26 @@ export default function ValidationRunDetailPage() {
                 </div>
               </div>
             )}
+
+            {/* Interactive Data Quality Charts */}
+            {getCategoryCharts('data_quality').length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Visual Analytics — Missingness & Feature Cardinality
+                </h4>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {getCategoryCharts('data_quality').map((chart) => (
+                    <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Module 3: Fairness & Bias Diagnostics */}
-      {hasFairness && fairnessMetrics && (
+      {hasFairness && fairnessMetrics ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -617,12 +876,58 @@ export default function ValidationRunDetailPage() {
                 </div>
               );
             })}
+
+            {/* Interactive Fairness Charts */}
+            {getCategoryCharts('fairness').length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Visual Analytics — Demographic Parity & Subgroup Rates
+                </h4>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {getCategoryCharts('fairness').map((chart) => (
+                    <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-3">
+            <div className="flex items-center gap-2">
+              <Scale className="w-5 h-5 text-gray-400" />
+              <h3 className="text-base font-semibold text-gray-800">Module 3 — Model Fairness & Bias Validation</h3>
+            </div>
+            <span className="text-xs font-semibold px-2.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase">
+              {validatorStatuses.fairness?.status_label || (isRegression ? 'UNSUPPORTED' : 'NOT EVALUATED')}
+            </span>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-md p-4 text-xs text-slate-600 flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-slate-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="font-semibold text-slate-800">
+                {validatorStatuses.fairness?.explanation || (isRegression ? 'Task unsupported: Group fairness parity metrics are formulated for discrete classification outcomes.' : 'Prerequisites Missing: Sensitive demographic attributes were not configured for this dataset or run.')}
+              </p>
+              <p className="text-slate-500 mt-1">
+                {isRegression
+                  ? 'Continuous regression values do not evaluate selection rates (P(ŷ=1)) or disparate impact ratios.'
+                  : 'To audit demographic parity, equal opportunity, and EEOC 80% Four-Fifths compliance, specify protected attribute columns in dataset configuration.'}
+              </p>
+            </div>
+          </div>
+          {getCategoryCharts('fairness').length > 0 && (
+            <div className="mt-4">
+              {getCategoryCharts('fairness').map((chart) => (
+                <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* Module 4: Data & Concept Drift Diagnostics */}
-      {hasDrift && driftMetrics && (
+      {hasDrift && driftMetrics ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -733,7 +1038,51 @@ export default function ValidationRunDetailPage() {
                 </table>
               </div>
             </div>
+
+            {/* Interactive Drift Charts */}
+            {getCategoryCharts('drift').length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Visual Analytics — Feature Drift & Divergence
+                </h4>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {getCategoryCharts('drift').map((chart) => (
+                    <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-3">
+            <div className="flex items-center gap-2">
+              <Wind className="w-5 h-5 text-gray-400" />
+              <h3 className="text-base font-semibold text-gray-800">Module 4 — Data & Concept Drift Detection</h3>
+            </div>
+            <span className="text-xs font-semibold px-2.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase">
+              {validatorStatuses.drift?.status_label || 'NOT EVALUATED'}
+            </span>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-md p-4 text-xs text-slate-600 flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-slate-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="font-semibold text-slate-800">
+                {validatorStatuses.drift?.explanation || 'Prerequisites Missing: Baseline reference dataset was not provided for drift evaluation.'}
+              </p>
+              <p className="text-slate-500 mt-1">
+                To evaluate empirical Kolmogorov-Smirnov (KS) feature drift, Population Stability Index (PSI), and prediction output shift, specify a baseline reference dataset during validation setup.
+              </p>
+            </div>
+          </div>
+          {getCategoryCharts('drift').length > 0 && (
+            <div className="mt-4">
+              {getCategoryCharts('drift').map((chart) => (
+                <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -842,6 +1191,20 @@ export default function ValidationRunDetailPage() {
                 </table>
               </div>
             </div>
+
+            {/* Interactive Robustness Charts */}
+            {getCategoryCharts('robustness').length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Visual Analytics — Adversarial Noise Perturbation
+                </h4>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {getCategoryCharts('robustness').map((chart) => (
+                    <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -955,6 +1318,20 @@ export default function ValidationRunDetailPage() {
                 </table>
               </div>
             </div>
+
+            {/* Interactive Explainability Charts */}
+            {getCategoryCharts('explainability').length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Visual Analytics — Attribution Concentration & Rankings
+                </h4>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {getCategoryCharts('explainability').map((chart) => (
+                    <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1100,7 +1477,55 @@ export default function ValidationRunDetailPage() {
                 </div>
               </div>
             )}
+
+            {/* Interactive Reliability Charts */}
+            {getCategoryCharts('reliability').length > 0 && (
+              <div className="space-y-3 pt-2">
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Visual Analytics — Probability Calibration & Confidence
+                </h4>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {getCategoryCharts('reliability').map((chart) => (
+                    <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
+        </div>
+      )}
+
+      {!hasReliability && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-3">
+            <div className="flex items-center gap-2">
+              <Gauge className="w-5 h-5 text-gray-400" />
+              <h3 className="text-base font-semibold text-gray-800">
+                Module 7 — Model Reliability & Probability Calibration
+              </h3>
+            </div>
+            <span className="text-xs font-semibold px-2.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 uppercase">
+              {validatorStatuses.reliability?.status_label || 'NOT EVALUATED'}
+            </span>
+          </div>
+          <div className="bg-slate-50 border border-slate-200 rounded-md p-4 text-xs text-slate-600 flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-slate-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="font-semibold text-slate-800">
+                {validatorStatuses.reliability?.explanation || 'Model does not output continuous probability estimates (predict_proba unavailable).'}
+              </p>
+              <p className="text-slate-500 mt-1">
+                Deterministic discrete outputs cannot evaluate probabilistic Brier scores, Expected Calibration Error (ECE), or calibration reliability curves without probability calibration wrapper.
+              </p>
+            </div>
+          </div>
+          {getCategoryCharts('reliability').length > 0 && (
+            <div className="mt-4">
+              {getCategoryCharts('reliability').map((chart) => (
+                <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1192,6 +1617,285 @@ export default function ValidationRunDetailPage() {
           )}
         </div>
       </div>
+    </div>
+  )}
+
+      {/* Tab 2: Dedicated Interactive Visual Analytics Engine */}
+      {activeViewTab === 'visual_analytics' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <BarChart2 className="w-5 h-5 text-blue-600" />
+                  <h3 className="text-base font-bold text-gray-900">
+                    Interactive Visual Analytics Engine
+                  </h3>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Empirical interactive charts generated dynamically from persisted validation run metrics. Explore distributions, threshold boundaries, calibration curves, and export underlying series to CSV.
+                </p>
+              </div>
+
+              {/* Category Filter Pills */}
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { id: 'all', label: 'All Pillars' },
+                  { id: 'performance', label: 'Performance' },
+                  { id: 'data_quality', label: 'Data Quality' },
+                  { id: 'drift', label: 'Drift' },
+                  { id: 'fairness', label: 'Fairness' },
+                  { id: 'robustness', label: 'Robustness' },
+                  { id: 'explainability', label: 'Explainability' },
+                  { id: 'reliability', label: 'Reliability' },
+                ].map((pill) => (
+                  <button
+                    key={pill.id}
+                    onClick={() => setSelectedChartCategory(pill.id)}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                      selectedChartCategory === pill.id
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {pill.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {filteredCharts.length === 0 ? (
+            <div className="bg-white rounded-lg border border-gray-200 p-12 text-center text-gray-500">
+              <PieChart className="w-8 h-8 text-gray-400 mx-auto mb-2 opacity-60" />
+              No visual analytics charts available for the selected pillar.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {filteredCharts.map((chart) => (
+                <ChartCard key={chart.chart_id} chart={chart} runId={run.id} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab 3: Dedicated Predictions Comparison */}
+      {activeViewTab === 'predictions' && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-5">
+            <div className="flex items-center gap-2">
+              <Database className="w-5 h-5 text-blue-600" />
+              <h3 className="text-base font-bold text-gray-900">
+                Row-Level Prediction Comparison Table
+              </h3>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Sample-by-sample model predictions compared directly against ground truth labels (Deepchecks standard).
+            </p>
+          </div>
+          {perfMetrics.predictions?.sample_rows ? (
+            <div className="border border-gray-200 rounded-lg p-4 bg-white shadow-xs">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-800">
+                    Row-Level Predictions
+                  </h4>
+                  <p className="text-xs text-gray-500">
+                    {perfMetrics.predictions.total_rows} evaluated, {perfMetrics.predictions.incorrect_rows ?? 0} misclassified
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="inline-flex rounded-md shadow-xs" role="group">
+                    <button
+                      type="button"
+                      onClick={() => { setPredictionFilter('all'); setPredictionPage(1); }}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-l-md border ${
+                        predictionFilter === 'all'
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      All ({perfMetrics.predictions.sample_rows.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setPredictionFilter('incorrect'); setPredictionPage(1); }}
+                      className={`px-2.5 py-1 text-xs font-medium border-t border-b ${
+                        predictionFilter === 'incorrect'
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      Misclassified ({perfMetrics.predictions.sample_rows.filter((r: any) => !r.correct).length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setPredictionFilter('correct'); setPredictionPage(1); }}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-r-md border ${
+                        predictionFilter === 'correct'
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      Correct ({perfMetrics.predictions.sample_rows.filter((r: any) => r.correct).length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto max-h-96">
+                <table className="min-w-full text-xs divide-y divide-gray-200">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-gray-600">Row #</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-600">Actual Label</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-600">Predicted</th>
+                      <th className="px-3 py-2 text-center font-medium text-gray-600">Verdict</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-600">Prediction Probabilities</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 bg-white">
+                    {perfMetrics.predictions.sample_rows
+                      .filter((row: any) => {
+                        if (predictionFilter === 'incorrect') return !row.correct;
+                        if (predictionFilter === 'correct') return row.correct;
+                        return true;
+                      })
+                      .map((row: any) => (
+                        <tr key={row.row_index} className={row.correct ? 'hover:bg-gray-50' : 'bg-red-50/40 hover:bg-red-50'}>
+                          <td className="px-3 py-2 text-gray-500 font-mono">#{row.row_index}</td>
+                          <td className="px-3 py-2 font-medium text-gray-900">{String(row.actual)}</td>
+                          <td className="px-3 py-2 font-semibold text-gray-900">{String(row.predicted)}</td>
+                          <td className="px-3 py-2 text-center">
+                            {row.correct ? (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-800">
+                                Match
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-800">
+                                Error
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-[11px]">
+                            {row.probabilities ? (
+                              <div className="flex gap-2">
+                                {Object.entries(row.probabilities).map(([k, v]: [string, any]) => (
+                                  <span key={k} className="text-gray-600">
+                                    {k}: <span className="font-semibold text-gray-900">{((v as number) * 100).toFixed(1)}%</span>
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 italic">Deterministic Output (no predict_proba)</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-500 text-sm">
+              No row-level prediction comparison data logged for this run.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab 4: Dedicated Findings */}
+      {activeViewTab === 'findings' && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+          <div className="px-6 py-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              <h3 className="text-base font-semibold text-gray-900">Validation Findings & Recommendations</h3>
+              <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full font-medium">
+                {filteredFindings.length}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-1 text-xs">
+              {['all', 'critical', 'high', 'medium', 'low', 'info'].map((sev) => (
+                <button
+                  key={sev}
+                  onClick={() => setSelectedSeverity(sev)}
+                  className={`px-2.5 py-1 rounded-md uppercase font-medium transition-colors ${
+                    selectedSeverity === sev
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {sev}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="p-6">
+            {filteredFindings.length === 0 ? (
+              <div className="text-center py-8 text-gray-500 text-sm">
+                <CheckCircle className="w-8 h-8 text-green-500 mx-auto mb-2 opacity-60" />
+                No findings matching the selected filter.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {filteredFindings.map((finding) => (
+                  <div
+                    key={finding.id}
+                    className="p-4 rounded-lg border border-gray-200 bg-white hover:border-gray-300 transition-shadow shadow-xs space-y-2"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <SeverityBadge severity={finding.severity} />
+                          <span className="text-xs font-semibold uppercase text-gray-400 tracking-wider">
+                            {finding.category}
+                          </span>
+                        </div>
+                        <h4 className="text-sm font-semibold text-gray-900 mt-1">{finding.title}</h4>
+                      </div>
+                      {finding.validator_name && (
+                        <span className="text-[11px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
+                          {finding.validator_name} v{finding.validator_version}
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-gray-600 leading-relaxed">{finding.description}</p>
+
+                    {(finding.metric_name || finding.threshold) && (
+                      <div className="flex flex-wrap gap-4 text-xs bg-gray-50 p-2.5 rounded border border-gray-100 font-mono">
+                        {finding.metric_name && (
+                          <div>
+                            <span className="text-gray-500 font-sans">Observed Metric ({finding.metric_name}): </span>
+                            <span className="font-bold text-gray-800">{finding.metric_value}</span>
+                          </div>
+                        )}
+                        {finding.threshold && (
+                          <div>
+                            <span className="text-gray-500 font-sans">Acceptance Threshold: </span>
+                            <span className="text-gray-700">{finding.threshold}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {finding.recommendation && (
+                      <div className="text-xs text-blue-900 bg-blue-50/80 p-2.5 rounded border border-blue-100/70">
+                        <span className="font-semibold text-blue-800">Recommendation: </span>
+                        {finding.recommendation}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

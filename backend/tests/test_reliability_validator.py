@@ -142,6 +142,7 @@ def test_model_without_predict_proba(reliability_validator):
 
     result = reliability_validator.validate(context)
 
-    assert result.status == ValidatorStatus.SUCCESS
+    assert result.status == ValidatorStatus.NOT_EVALUATED
+    assert result.score is None
     assert result.metrics["supports_probabilities"] is False
     assert any("predict_proba" in f.description for f in result.findings)

@@ -18,6 +18,8 @@ class ValidatorStatus(str, enum.Enum):
     WARNING = 'warning'
     ERROR = 'error'
     SKIPPED = 'skipped'
+    NOT_EVALUATED = 'not_evaluated'
+    UNSUPPORTED = 'unsupported'
 
 
 @dataclass
@@ -48,6 +50,8 @@ class ValidatorResult:
     error_message: str | None = None
     category: str | None = None
     message: str | None = None
+    explanation: str | None = None
+    status_label: str = 'SUCCESS'
 
 
 @dataclass
@@ -86,6 +90,13 @@ class BaseValidator(ABC):
         validator might require sensitive_columns to be non-empty.
         """
         return True
+
+    def get_inapplicability_details(self, context: ValidationContext) -> tuple[ValidatorStatus, str]:
+        """Return (status, reason) when is_applicable() returns False."""
+        return (
+            ValidatorStatus.NOT_EVALUATED,
+            f"Prerequisites missing: Validator '{self.name}' could not be evaluated on current context."
+        )
     
     @abstractmethod
     def validate(self, context: ValidationContext) -> Any:
@@ -93,16 +104,22 @@ class BaseValidator(ABC):
         ...
     
     async def safe_validate(self, context: ValidationContext) -> ValidatorResult:
-        """Wrapper that catches unexpected exceptions gracefully."""
+        """Wrapper that catches unexpected exceptions gracefully and maintains module independence."""
         import inspect
         start_time = time.time()
         try:
             if not self.is_applicable(context):
+                inapp_status, inapp_reason = self.get_inapplicability_details(context)
+                err_msg = f"Validator {self.name} is not applicable to this context: {inapp_reason}"
                 return ValidatorResult(
                     validator_name=self.name,
                     validator_version=self.version,
                     status=ValidatorStatus.SKIPPED,
-                    error_message=f'Validator {self.name} is not applicable to this context'
+                    score=None,
+                    error_message=err_msg,
+                    explanation=inapp_reason,
+                    status_label=inapp_status.value.upper(),
+                    category=self.category,
                 )
             
             res = self.validate(context)
@@ -112,12 +129,17 @@ class BaseValidator(ABC):
                 result = res
 
             result.execution_time_seconds = time.time() - start_time
+            if not getattr(result, 'status_label', None):
+                result.status_label = result.status.value.upper()
             return result
         except Exception as e:
             return ValidatorResult(
                 validator_name=self.name,
                 validator_version=self.version,
                 status=ValidatorStatus.ERROR,
+                status_label='ERROR',
                 execution_time_seconds=time.time() - start_time,
-                error_message=f'Validator {self.name} failed unexpectedly: {str(e)}'
+                error_message=f'Validator {self.name} failed unexpectedly: {str(e)}',
+                explanation=f'Unexpected runtime error: {str(e)}',
+                category=self.category,
             )
